@@ -4,7 +4,40 @@ import { useGraphStore } from '../store/graphStore'
 import { SphereCanvas } from './SphereCanvas'
 import { ClockOrbit } from './ClockOrbit'
 import { SuggestedNodes } from './SuggestedNodes'
-import type { SwapData } from '../types'
+import type { SwapData, AgentData } from '../types'
+
+function AgentRunningRing({ size, color }: { size: number; color: string }) {
+  return (
+    <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 3 }}>
+      {/* Outer dashed rotating ring */}
+      <div style={{
+        position: 'absolute',
+        inset: -6,
+        borderRadius: '50%',
+        border: `2px dashed ${color}`,
+        opacity: 0.55,
+        animation: 'agentScan 2.8s linear infinite',
+      }} />
+      {/* Inner solid rotating ring — opposite direction */}
+      <div style={{
+        position: 'absolute',
+        inset: -12,
+        borderRadius: '50%',
+        border: `1.5px dashed ${color}`,
+        opacity: 0.25,
+        animation: 'agentScanReverse 4s linear infinite',
+      }} />
+      {/* Pulsing glow */}
+      <div style={{
+        position: 'absolute',
+        inset: -2,
+        borderRadius: '50%',
+        boxShadow: `0 0 18px 4px ${color}55`,
+        animation: 'agentPulse 1.6s ease-in-out infinite',
+      }} />
+    </div>
+  )
+}
 
 interface SphereNodeProps {
   node: NodeData
@@ -26,6 +59,7 @@ export function SphereNode({ node }: SphereNodeProps) {
 
   const isTimeLocked = node.type === 'swap' && (node.data as SwapData).timeLocked
   const lockTime = node.type === 'swap' ? (node.data as SwapData).lockTime : undefined
+  const isAgentRunning = node.type === 'agent' && (node.data as AgentData).status === 'running'
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
@@ -79,6 +113,7 @@ export function SphereNode({ node }: SphereNodeProps) {
       {/* The Sphere */}
       <div className="relative" style={{ animation: 'float 6s ease-in-out infinite' }}>
         <SphereCanvas type={node.type} size={node.size} isSelected={node.isSelected} />
+        {isAgentRunning && <AgentRunningRing size={node.size} color={meta.glow} />}
       </div>
 
       {/* Input port — invisible hit zone, glows when valid drop target */}

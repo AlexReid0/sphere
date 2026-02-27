@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { NodeType, NODE_TYPE_META } from '../types'
 import { useGraphStore } from '../store/graphStore'
 
-const NODE_TYPES: NodeType[] = ['swap', 'yield', 'distribute', 'wallet']
+const NODE_TYPES: NodeType[] = ['swap', 'yield', 'distribute', 'wallet', 'agent']
 
 export function NodePalette() {
   const addNode = useGraphStore(s => s.addNode)

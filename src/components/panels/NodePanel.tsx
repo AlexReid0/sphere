@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useGraphStore } from '../../store/graphStore'
 import { NODE_TYPE_META, NodeData } from '../../types'
-import type { Connection, SwapData, YieldData, DistributeData, WalletData } from '../../types'
+import type { Connection, SwapData, YieldData, DistributeData, WalletData, AgentData } from '../../types'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -135,6 +135,10 @@ function computeNodeValue(node: NodeData): string {
     case 'wallet': {
       const d = node.data as WalletData
       return `${formatAmount(d.balance)} ${d.currency}`
+    }
+    case 'agent': {
+      const d = node.data as AgentData
+      return d.status === 'running' ? 'Running…' : d.status === 'completed' ? 'Done' : 'Idle'
     }
   }
 }
@@ -1705,6 +1709,323 @@ function EditableLabel({ nodeId, label, color }: { nodeId: string; label: string
   )
 }
 
+// ─── Agent panel ──────────────────────────────────────────────────────────────
+
+// Log entries are encoded as "type:text" — types: log | web | trade
+const AGENT_LOG_STEPS = [
+  'log:Setting up Openclaw instance…',
+  'log:Checking wallet balance…',
+  'log:Setting up trading system to enable trading with given wallet balance…',
+  'log:Researching tokens…',
+  'web:dexscreener.com/trending',
+  'web:coingecko.com/en/new-cryptocurrencies',
+  'web:birdeye.so/tokens',
+  'web:gmgn.ai/sol/trending',
+  'web:defined.fi/pulse',
+  'log:Analysing on-chain metrics across 5 sources…',
+  'log:Shortlisting by 24h volume, liquidity depth and momentum…',
+  'log:Placing trades…',
+  'trade:Bought $400 worth of $NIGHT',
+  'log:Finding new tokens…',
+]
+
+function AgentPanel({ node }: { node: NodeData }) {
+  const d = node.data as AgentData
+  const meta = NODE_TYPE_META[node.type]
+  const nodes = useGraphStore(s => s.nodes)
+  const connections = useGraphStore(s => s.connections)
+  const upd = useGraphStore(s => s.updateNodeData)
+  const updateNodeValue = useGraphStore(s => s.updateNodeValue)
+  const logHistory = useGraphStore(s => s.logHistory)
+  const confirmHistoryEntry = useGraphStore(s => s.confirmHistoryEntry)
+  const u = (p: Partial<AgentData>) => upd(node.id, p as Record<string, unknown>)
+
+  // Find budget source: first incoming connection's node (wallet / yield / distribute)
+  const incomingConn = connections.find(c => c.toNodeId === node.id)
+  const budgetSource = incomingConn ? nodes.find(n => n.id === incomingConn.fromNodeId) : null
+  const budgetSourceMeta = budgetSource ? NODE_TYPE_META[budgetSource.type] : null
+
+  // Simulate log progression while running
+  const logIndexRef = useRef(0)
+  const intervalRef = useRef<ReturnType<typeof setInterval>>()
+
+  const logContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (d.status === 'running') {
+      logIndexRef.current = (d.logs?.length ?? 0)
+      intervalRef.current = setInterval(() => {
+        const idx = logIndexRef.current
+        if (idx < AGENT_LOG_STEPS.length) {
+          u({ logs: [...(d.logs ?? []), AGENT_LOG_STEPS[idx]] })
+          logIndexRef.current = idx + 1
+        } else {
+          clearInterval(intervalRef.current)
+        }
+      }, 780)
+    } else {
+      clearInterval(intervalRef.current)
+    }
+    return () => clearInterval(intervalRef.current)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.status])
+
+  // Auto-scroll log to bottom as new entries arrive
+  useEffect(() => {
+    const el = logContainerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [d.logs?.length])
+
+  const handleRun = () => {
+    u({ status: 'running', logs: [], usedBudget: '0', lastOutput: undefined })
+    const histId = logHistory({
+      kind: 'agent_started',
+      label: `Agent "${node.label}" started`,
+      status: 'loading',
+      detail: d.instructions ? d.instructions.slice(0, 80) : 'No instructions provided',
+    })
+    // Auto-complete after all steps play out
+    setTimeout(() => {
+      upd(node.id, {
+        status: 'completed',
+        lastOutput: 'Bought $400 of $NIGHT · Scanning for new opportunities · 1 active position',
+        usedBudget: '400',
+      } as Partial<AgentData> as Record<string, unknown>)
+      updateNodeValue(node.id, '$NIGHT +12.4%')
+      confirmHistoryEntry(histId)
+      logHistory({ kind: 'agent_completed', label: `Agent "${node.label}" — bought $400 $NIGHT`, status: 'confirmed' })
+    }, AGENT_LOG_STEPS.length * 780 + 600)
+  }
+
+  const handleStop = () => {
+    clearInterval(intervalRef.current)
+    u({ status: 'stopped', lastOutput: 'Agent stopped by user.' })
+    updateNodeValue(node.id, 'Idle')
+    logHistory({ kind: 'agent_stopped', label: `Agent "${node.label}" stopped` })
+  }
+
+  const isRunning = d.status === 'running'
+  const statusColors: Record<AgentData['status'], string> = {
+    idle: '#94A3B8', running: meta.glow, stopped: '#F59E0B', completed: '#10B981',
+  }
+  const statusColor = statusColors[d.status]
+
+  return (
+    <div className="space-y-3">
+      {/* Openclaw branding header */}
+      <div className="flex items-center justify-between rounded-xl px-3 py-2"
+        style={{ background: `${meta.glow}0D`, border: `1px solid ${meta.glow}25` }}>
+        <div className="flex items-center gap-2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c.83 0 1.5.67 1.5 1.5S12.83 8 12 8s-1.5-.67-1.5-1.5S11.17 5 12 5zm4 10.5c0 .28-.22.5-.5.5h-7c-.28 0-.5-.22-.5-.5v-1c0-.28.22-.5.5-.5H10v-3h-.5c-.28 0-.5-.22-.5-.5v-1c0-.28.22-.5.5-.5h3c.28 0 .5.22.5.5v4h.5c.28 0 .5.22.5.5v1z" fill={meta.glow} opacity="0.9"/>
+          </svg>
+          <span style={{ fontSize: 12, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 700, color: meta.glow }}>
+            Openclaw
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <div style={{
+            width: 6, height: 6, borderRadius: '50%', background: statusColor,
+            boxShadow: isRunning ? `0 0 6px ${statusColor}` : 'none',
+            animation: isRunning ? 'agentPulse 1.2s ease-in-out infinite' : 'none',
+          }} />
+          <span style={{ fontSize: 9, fontFamily: 'monospace', color: statusColor, letterSpacing: '0.06em' }}>
+            {d.status.toUpperCase()}
+          </span>
+        </div>
+      </div>
+
+      {/* Budget source */}
+      <div>
+        <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em', marginBottom: 4 }}>
+          BUDGET SOURCE
+        </div>
+        {budgetSource ? (
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2"
+            style={{ background: `${budgetSourceMeta!.glow}0D`, border: `1px solid ${budgetSourceMeta!.glow}22` }}>
+            <div style={{
+              width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+              background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.55) 18%, ${budgetSourceMeta!.color2} 52%, ${budgetSourceMeta!.color1} 100%)`,
+            }} />
+            <div className="flex-1 min-w-0">
+              <div style={{ fontSize: 11, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 600, color: budgetSourceMeta!.glow }}>
+                {budgetSource.label}
+              </div>
+              <div style={{ fontSize: 9, fontFamily: 'monospace', color: '#94A3B8' }}>
+                {budgetSource.value ?? '—'}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 rounded-xl px-3 py-2"
+            style={{ background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.08)' }}>
+            <span style={{ fontSize: 10, color: '#CBD5E1', fontFamily: 'monospace' }}>
+              Connect a wallet, yield, or distribute node as input
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Max budget */}
+      <Field
+        label="Max budget (USDC)"
+        value={d.maxBudget}
+        onChange={v => u({ maxBudget: v })}
+        color={meta.glow}
+      />
+
+      {d.usedBudget !== '0' && (
+        <div className="flex items-center justify-between rounded-lg px-3 py-1.5"
+          style={{ background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.07)' }}>
+          <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace' }}>USED</span>
+          <span style={{ fontSize: 10, color: meta.glow, fontFamily: 'Space Mono, monospace', fontWeight: 600 }}>
+            {d.usedBudget} USDC
+          </span>
+        </div>
+      )}
+
+      <SectionDivider label="INSTRUCTIONS" />
+
+      {/* Instructions textarea */}
+      <div>
+        <textarea
+          value={d.instructions}
+          onChange={e => u({ instructions: e.target.value })}
+          placeholder="Describe what the agent should do with the allocated budget…&#10;e.g. Monitor USDC yield, rebalance if APY drops below 3%, notify when done."
+          rows={5}
+          style={{
+            width: '100%', borderRadius: 12, padding: '10px 12px',
+            background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.09)',
+            fontSize: 11, color: '#1E293B', fontFamily: 'Space Grotesk, sans-serif',
+            lineHeight: 1.55, resize: 'vertical', outline: 'none',
+            boxSizing: 'border-box',
+          }}
+          onFocus={e => { e.target.style.border = `1px solid ${meta.glow}66`; e.target.style.boxShadow = `0 0 0 3px ${meta.glow}15` }}
+          onBlur={e => { e.target.style.border = '1px solid rgba(0,0,0,0.09)'; e.target.style.boxShadow = 'none' }}
+        />
+      </div>
+
+      {/* Model info */}
+      <div className="flex items-center gap-1.5">
+        <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace' }}>MODEL</span>
+        <span style={{ fontSize: 9, color: meta.glow, fontFamily: 'Space Mono, monospace', fontWeight: 600 }}>
+          {d.model}
+        </span>
+      </div>
+
+      <SectionDivider />
+
+      {/* Run / Stop button */}
+      {isRunning ? (
+        <button
+          onClick={handleStop}
+          className="w-full py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.99]"
+          style={{
+            background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+            color: '#EF4444', fontFamily: 'Space Grotesk, sans-serif',
+          }}
+        >
+          <div style={{
+            width: 8, height: 8, background: '#EF4444', borderRadius: 2,
+            animation: 'none',
+          }} />
+          Stop Agent
+        </button>
+      ) : (
+        <button
+          onClick={handleRun}
+          disabled={!d.instructions.trim()}
+          className="w-full py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
+          style={{
+            background: d.instructions.trim() ? meta.glow : 'rgba(0,0,0,0.05)',
+            border: `1px solid ${d.instructions.trim() ? meta.glow : 'rgba(0,0,0,0.1)'}`,
+            color: d.instructions.trim() ? '#fff' : '#94A3B8',
+            fontFamily: 'Space Grotesk, sans-serif',
+            boxShadow: d.instructions.trim() ? `0 2px 12px ${meta.glow}55` : 'none',
+          }}
+        >
+          ▶ Run Agent
+        </button>
+      )}
+
+      {/* Log / Output */}
+      {((d.logs && d.logs.length > 0) || d.lastOutput) && (
+        <>
+          <SectionDivider label="ACTIVITY" />
+          <div className="rounded-xl overflow-hidden"
+            style={{ background: '#F8FAFC', border: '1px solid rgba(0,0,0,0.07)' }}>
+            {/* Live log lines */}
+            {d.logs && d.logs.length > 0 && (
+              <div ref={logContainerRef} className="px-3 pt-2.5 pb-1 space-y-1 overflow-y-auto" style={{ overscrollBehavior: 'contain', maxHeight: 220 }}>
+                {d.logs.map((encoded, i) => {
+                  const colon = encoded.indexOf(':')
+                  const kind = encoded.slice(0, colon) as 'log' | 'web' | 'trade'
+                  const text = encoded.slice(colon + 1)
+                  const isLast = i === (d.logs?.length ?? 0) - 1
+
+                  if (kind === 'web') {
+                    return (
+                      <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1"
+                        style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.12)' }}>
+                        <span style={{ fontSize: 10, flexShrink: 0 }}>🌐</span>
+                        <span style={{ fontSize: 9, color: '#6366F1', fontFamily: 'Space Mono, monospace', lineHeight: 1.4, flex: 1 }}>
+                          {text}
+                        </span>
+                        {isLast && isRunning && (
+                          <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#6366F1', animation: 'agentPulse 0.8s ease-in-out infinite', flexShrink: 0 }} />
+                        )}
+                      </div>
+                    )
+                  }
+
+                  if (kind === 'trade') {
+                    return (
+                      <div key={i} className="flex items-center gap-2 rounded-lg px-2 py-1.5"
+                        style={{ background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                        <span style={{ fontSize: 11, flexShrink: 0 }}>⚡</span>
+                        <span style={{ fontSize: 11, color: '#059669', fontFamily: 'Space Grotesk, sans-serif', fontWeight: 700, lineHeight: 1.3 }}>
+                          {text}
+                        </span>
+                        <span className="ml-auto px-1.5 py-0.5 rounded-md" style={{ fontSize: 8, background: 'rgba(5,150,105,0.15)', color: '#059669', fontFamily: 'monospace', flexShrink: 0 }}>
+                          CONFIRMED
+                        </span>
+                      </div>
+                    )
+                  }
+
+                  // Regular log step
+                  return (
+                    <div key={i} className="flex items-start gap-2">
+                      <span style={{ fontSize: 8, color: '#CBD5E1', fontFamily: 'monospace', flexShrink: 0, marginTop: 3, minWidth: 14, textAlign: 'right' }}>
+                        {String(i + 1).padStart(2, '0')}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#475569', fontFamily: 'Space Mono, monospace', lineHeight: 1.55, flex: 1 }}>
+                        {text}
+                      </span>
+                      {isLast && isRunning && (
+                        <span style={{ fontSize: 10, color: meta.glow, animation: 'agentPulse 1s ease-in-out infinite', flexShrink: 0 }}>▌</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {/* Final output summary */}
+            {d.lastOutput && (
+              <div className="px-3 py-2.5 border-t flex items-center gap-2" style={{ borderColor: 'rgba(0,0,0,0.06)', background: 'rgba(5,150,105,0.04)' }}>
+                <span style={{ fontSize: 14, flexShrink: 0 }}>✅</span>
+                <div style={{ fontSize: 10, color: '#064E3B', fontFamily: 'Space Grotesk, sans-serif', lineHeight: 1.5, fontWeight: 500 }}>
+                  {d.lastOutput}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 export function NodePanel() {
@@ -1736,14 +2057,16 @@ export function NodePanel() {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 320 }}
           transition={{ type: 'spring', damping: 22, stiffness: 280 }}
-          className="fixed top-1/2 -translate-y-1/2 w-72 rounded-2xl flex flex-col"
+          className="fixed w-72 rounded-2xl flex flex-col"
           style={{
             zIndex: 100,
             right: 276,
+            top: 68,
+            bottom: 20,
+            maxHeight: 'calc(100vh - 88px)',
             background: '#FFFFFF',
             border: `1px solid ${NODE_TYPE_META[node.type].glow}33`,
             boxShadow: `0 4px 32px rgba(0,0,0,0.12), 0 1px 4px rgba(0,0,0,0.06)`,
-            maxHeight: 'calc(100vh - 120px)',
             overflow: 'hidden',
           }}
         >
@@ -1784,6 +2107,7 @@ export function NodePanel() {
             {node.type === 'yield'      && <YieldPanel node={node} />}
             {node.type === 'distribute' && <DistributePanel node={node} />}
             {node.type === 'wallet'     && <WalletPanel node={node} />}
+            {node.type === 'agent'      && <AgentPanel node={node} />}
           </div>
 
           {/* Footer: Save button */}

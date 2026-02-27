@@ -1,4 +1,4 @@
-export type NodeType = 'swap' | 'yield' | 'distribute' | 'wallet'
+export type NodeType = 'swap' | 'yield' | 'distribute' | 'wallet' | 'agent'
 
 export interface NodePosition {
   x: number
@@ -12,7 +12,7 @@ export interface NodeData {
   label: string
   value?: string
   size: number
-  data: SwapData | YieldData | DistributeData | WalletData
+  data: SwapData | YieldData | DistributeData | WalletData | AgentData
   isSelected: boolean
   isHovered: boolean
 }
@@ -79,6 +79,17 @@ export interface WalletData {
   currency: string
   totalYieldReceived: string
   tokenBalances?: Record<string, string>
+}
+
+// Agent: AI agent powered by Openclaw
+export interface AgentData {
+  instructions: string
+  status: 'idle' | 'running' | 'stopped' | 'completed'
+  maxBudget: string        // max budget allocated from parent node
+  usedBudget: string       // amount consumed so far (UI only)
+  model: string            // e.g. 'openclaw-1'
+  lastOutput?: string      // last output message from agent
+  logs?: string[]          // running log entries
 }
 
 export interface Connection {
@@ -152,11 +163,21 @@ export const NODE_TYPE_META: Record<NodeType, {
     icon: '◉',
     description: 'Wallet balance destination',
   },
+  agent: {
+    label: 'Agent',
+    color1: '#3730A3',
+    color2: '#6366F1',
+    color3: '#E0E7FF',
+    glow: '#6366F1',
+    icon: '◈',
+    description: 'AI agent — powered by Openclaw',
+  },
 }
 
 export const SUGGESTIONS: Record<NodeType, NodeType[]> = {
   swap: ['wallet', 'distribute'],
   yield: ['wallet', 'distribute', 'swap'],
   distribute: [],
-  wallet: ['swap', 'yield'],
+  wallet: ['swap', 'yield', 'agent'],
+  agent: [],
 }

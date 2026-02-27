@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { NodeData, Connection, NodeType, AsteroidEvent, SwapData, WalletData, DistributeData, YieldData } from '../types'
+import { NodeData, Connection, NodeType, AsteroidEvent, SwapData, WalletData, DistributeData, YieldData, AgentData } from '../types'
 
 export interface HistoryEntry {
   id: string
@@ -16,6 +16,9 @@ export interface HistoryEntry {
     | 'yield_deployed'
     | 'usyc_redeemed'
     | 'wallet_created'
+    | 'agent_started'
+    | 'agent_stopped'
+    | 'agent_completed'
   label: string
   detail?: string
   amount?: string
@@ -67,6 +70,16 @@ function makeDefaultData(type: NodeType): NodeData['data'] {
         balance: '0',
         currency: 'USDC', totalYieldReceived: '0',
       } as WalletData
+    case 'agent':
+      return {
+        instructions: '',
+        status: 'idle',
+        maxBudget: '1,000',
+        usedBudget: '0',
+        model: 'openclaw-1',
+        lastOutput: undefined,
+        logs: [],
+      } as AgentData
   }
 }
 
@@ -250,7 +263,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   addNode: (type, position) => {
     const id = genId()
     const defaults: Record<NodeType, string> = {
-      swap: '0 USDC', yield: '0% APY', distribute: '0 USDC', wallet: '0 USDC',
+      swap: '0 USDC', yield: '0% APY', distribute: '0 USDC', wallet: '0 USDC', agent: 'Idle',
     }
     const label = `${NODE_TYPE_LABELS[type]} ${nodeIdCounter}`
     const nodeData = makeDefaultData(type)
@@ -379,5 +392,5 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 }))
 
 const NODE_TYPE_LABELS: Record<NodeType, string> = {
-  swap: 'Swap', yield: 'Yield', distribute: 'Distribute', wallet: 'Wallet',
+  swap: 'Swap', yield: 'Yield', distribute: 'Distribute', wallet: 'Wallet', agent: 'Agent',
 }

@@ -32,7 +32,10 @@ function getSuggestions(nodeType: NodeType, outTypes: Set<NodeType>): Suggestion
       missing('yield')      && { type: 'yield',      label: 'Earn Yield',  hint: 'Put idle wallet balance to work generating yield' },
       missing('swap')       && { type: 'swap',        label: 'Swap Assets', hint: 'Convert wallet balance to another token' },
       missing('distribute') && { type: 'distribute',  label: 'Distribute',  hint: 'Set up payroll or transfers from this wallet' },
+      missing('agent')      && { type: 'agent',       label: 'Add Agent',   hint: 'Attach an AI agent with budget from this wallet' },
     ].filter(Boolean) as Suggestion[],
+
+    agent: [],
   }
 
   return (all[nodeType] || []).slice(0, 3)

@@ -85,6 +85,21 @@ html, body, #root {
   to { transform: rotate(360deg); }
 }
 
+@keyframes agentScan {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes agentScanReverse {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(-360deg); }
+}
+
+@keyframes agentPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
 /* Framer motion defaults */
 [data-framer-motion] {
   will-change: transform;
