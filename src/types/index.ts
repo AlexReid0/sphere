@@ -38,12 +38,14 @@ export interface SwapData {
   schedule?: string       // 'One-time' | 'Daily' | 'Weekly' | 'Biweekly' | 'Monthly' | 'Quarterly'
   executionDay?: string   // weekday name for weekly, day-of-month for monthly
   trigger?: 'date' | 'after_parent'  // one-time execution trigger mode
-  // Quote state (simulated Circle quote response)
+  // Quote state (Circle quote response)
   quoteId?: string
   quoteExpiry?: string     // ISO timestamp
   quotedRate?: string      // rate string from quote
   quotedFee?: string       // fee % string
   quotedReceive?: string   // computed receive amount
+  // Backend tracking
+  txHash?: string
 }
 
 // Yield: handles both DeFi yield routing and RWA (USYC)
@@ -67,6 +69,9 @@ export interface YieldData {
   redemptionFeeBps?: string
   // Deploy trigger: after parent task completes → deploy to USDC
   trigger?: 'date' | 'after_parent'
+  // Backend tracking
+  txHash?: string
+  vaultShares?: string
 }
 
 export interface DistributeData {
@@ -80,6 +85,9 @@ export interface DistributeData {
   trigger?: 'date' | 'after_parent'   // how to trigger a one-time distribution
   oneTimeDate?: string                 // ISO date string when trigger = 'date'
   recipients: Array<{ name: string; amount: string; address: string; pct?: string }>
+  // Backend tracking
+  txHash?: string
+  scheduledJobId?: string
 }
 
 export interface WalletData {
@@ -88,6 +96,7 @@ export interface WalletData {
   currency: string
   totalYieldReceived: string
   tokenBalances?: Record<string, string>
+  circleWalletId?: string
 }
 
 // Agent: AI agent powered by Openclaw
@@ -99,6 +108,7 @@ export interface AgentData {
   model: string            // e.g. 'openclaw-1'
   lastOutput?: string      // last output message from agent
   logs?: string[]          // running log entries
+  openclawSessionId?: string
 }
 
 export interface Connection {

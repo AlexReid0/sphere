@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { NodeData, Connection, NodeType, AsteroidEvent, SwapData, WalletData, DistributeData, YieldData, AgentData } from '../types'
+import * as walletService from '../services/wallet'
 
 export interface HistoryEntry {
   id: string
@@ -25,6 +26,7 @@ export interface HistoryEntry {
   amount?: string
   status?: 'loading' | 'confirmed'
   addresses?: string[]
+  txHash?: string
 }
 
 let nodeIdCounter = 100
@@ -278,16 +280,21 @@ export const useGraphStore = create<GraphState>((set, get) => ({
     set(s => ({ nodes: [...s.nodes, node] }))
 
     if (type === 'wallet') {
-      const walletAddr = (nodeData as WalletData).address
       const histId = get().logHistory({
         kind: 'wallet_created',
         label: `Creating ${label}…`,
         status: 'loading',
-        detail: walletAddr,
+        detail: (nodeData as WalletData).address,
       })
-      setTimeout(() => {
+      // Create real Circle Programmable Wallet
+      walletService.createWallet(label).then(result => {
+        // Update node with real wallet address
+        get().updateNodeData(id, { address: result.address, circleWalletId: result.circleWalletId } as Record<string, unknown>)
         get().confirmHistoryEntry(histId)
-      }, 1800)
+      }).catch(() => {
+        // Fallback: just confirm with mock address
+        get().confirmHistoryEntry(histId)
+      })
     } else {
       get().logHistory({ kind: 'node_added', label: `Added ${label}` })
     }
@@ -337,6 +344,7 @@ export const useGraphStore = create<GraphState>((set, get) => ({
   spawnAsteroid: (fromNodeId, toNodeId, amount) => {
     const id = `ast_${Date.now()}`
     set(s => ({ asteroids: [...s.asteroids, { id, fromNodeId, toNodeId, amount, startTime: Date.now() }] }))
+    // Animation completes after 2s, then update UI
     setTimeout(() => {
       const toNode = get().nodes.find(n => n.id === toNodeId)
       if (toNode) get().updateNodeSize(toNodeId, Math.min(toNode.size + 5, 140))

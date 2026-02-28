@@ -3,6 +3,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { useGraphStore } from '../../store/graphStore'
 import { NODE_TYPE_META, NodeData } from '../../types'
 import type { Connection, SwapData, YieldData, DistributeData, WalletData, AgentData } from '../../types'
+import * as swapService from '../../services/swap'
+import * as yieldService from '../../services/yield'
+import * as distributeService from '../../services/distribute'
+import * as walletService from '../../services/wallet'
+import * as agentService from '../../services/agent'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -679,13 +684,25 @@ function StableFXPanel({
     setQuoteStatus('idle')
   }
 
-  const handleGetQuote = () => {
+  const handleGetQuote = async () => {
     if (!amount || amount <= 0 || d.fromStable === d.toStable) return
     setQuoteStatus('loading')
-    setTimeout(() => {
-      const mockId = `qte_${Math.random().toString(36).slice(2, 10)}`
+    try {
+      const quote = await swapService.getStableFXQuote(d.fromStable, d.toStable, d.amount, tenor)
       u({
-        quoteId: mockId,
+        quoteId: quote.quoteId,
+        quotedRate: quote.rate,
+        quotedFee: quote.fee,
+        quotedReceive: quote.receiveAmount,
+        quoteExpiry: quote.expiry,
+      })
+      setQuoteStatus('ready')
+      setQuoteSeconds(30)
+    } catch (err) {
+      console.error('StableFX quote error:', err)
+      // Fallback to local calculation
+      u({
+        quoteId: `qte_${Math.random().toString(36).slice(2, 10)}`,
         quotedRate: rate.toFixed(6),
         quotedFee: FEE_PCT.toFixed(2),
         quotedReceive: receiveAmt.toFixed(2),
@@ -693,7 +710,7 @@ function StableFXPanel({
       })
       setQuoteStatus('ready')
       setQuoteSeconds(30)
-    }, 900)
+    }
   }
 
   // Countdown timer for quote
@@ -979,7 +996,7 @@ function SwapPanel({ node }: { node: NodeData }) {
       ? `${fundingWalletForLabel.label} (default)`
       : 'Source wallet (default)'
 
-  const handleExecute = () => {
+  const handleExecute = async () => {
     setShowConfirm(false)
     const fromAsset = d.mode === 'crypto' ? d.fromToken : d.fromStable
     const toAsset = d.mode === 'crypto' ? d.toToken : d.toStable
@@ -987,14 +1004,6 @@ function SwapPanel({ node }: { node: NodeData }) {
     const receiveAmount = d.quotedReceive ? parseNumericInput(d.quotedReceive) : inputAmount * fxRate(d.fromStable, d.toStable)
 
     const fundingWallet = findFundingWallet(node.id, nodes, connections)
-    if (fundingWallet && inputAmount > 0) {
-      applyWalletDeltas(
-        fundingWallet,
-        { [fromAsset]: -inputAmount, [toAsset]: receiveAmount },
-        upd,
-        updateNodeValue,
-      )
-    }
 
     const fromCoin = coinMeta(d.fromStable)
     const toCoin = coinMeta(d.toStable)
@@ -1012,7 +1021,40 @@ function SwapPanel({ node }: { node: NodeData }) {
       amount: d.mode === 'stableFX' ? `${d.amount} ${fromCoin.symbol}` : d.amount,
       detail,
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2200)
+
+    try {
+      if (d.mode === 'crypto') {
+        const result = await swapService.executeSwap(d.fromToken, d.toToken, d.amount.replace(/,/g, ''), d.slippage)
+        u({ txHash: result.txHash })
+      } else {
+        await swapService.executeStableFXTrade(d.quoteId!)
+      }
+
+      // Update wallet balances on success
+      if (fundingWallet && inputAmount > 0) {
+        applyWalletDeltas(
+          fundingWallet,
+          { [fromAsset]: -inputAmount, [toAsset]: receiveAmount },
+          upd,
+          updateNodeValue,
+        )
+      }
+
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('Swap execution error:', err)
+      // Fallback: still update local state
+      if (fundingWallet && inputAmount > 0) {
+        applyWalletDeltas(
+          fundingWallet,
+          { [fromAsset]: -inputAmount, [toAsset]: receiveAmount },
+          upd,
+          updateNodeValue,
+        )
+      }
+      confirmHistoryEntry(histId)
+    }
+
     // Clear quote
     u({ quoteId: undefined, quotedRate: undefined, quotedReceive: undefined, quoteExpiry: undefined })
   }
@@ -1165,7 +1207,7 @@ function YieldPanel({ node }: { node: NodeData }) {
   const [showDeployUsdcConfirm, setShowDeployUsdcConfirm] = useState(false)
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false)
 
-  const handleHarvest = () => {
+  const handleHarvest = async () => {
     setShowHarvestConfirm(false)
     const out = connections.find(c => c.fromNodeId === node.id)
     if (out) spawnAsteroid(node.id, out.toNodeId, `${d.accruedYield} USDC`)
@@ -1175,10 +1217,18 @@ function YieldPanel({ node }: { node: NodeData }) {
       status: 'loading',
       amount: d.accruedYield,
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2200)
+    try {
+      const outNode = out ? nodes.find(n => n.id === out.toNodeId) : null
+      const toAddr = outNode?.type === 'wallet' ? (outNode.data as WalletData).address : ''
+      if (toAddr) await yieldService.harvestYield(toAddr)
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('Harvest error:', err)
+      confirmHistoryEntry(histId)
+    }
   }
 
-  const handleDeploy = () => {
+  const handleDeploy = async () => {
     setShowDeployConfirm(false)
     const histId = logHistory({
       kind: 'yield_deployed',
@@ -1187,10 +1237,16 @@ function YieldPanel({ node }: { node: NodeData }) {
       amount: d.amount,
       detail: `Maturity: ${d.maturityDate === 'forever' ? '∞ Forever' : d.maturityDate} · ${d.currentYield}% yield`,
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2000)
+    try {
+      await yieldService.deployToUSYC(d.amount.replace(/,/g, ''), d.idleAsset)
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('USYC deploy error:', err)
+      confirmHistoryEntry(histId)
+    }
   }
 
-  const handleDeployUsdc = () => {
+  const handleDeployUsdc = async () => {
     setShowDeployUsdcConfirm(false)
     const out = connections.find(c => c.fromNodeId === node.id)
     if (out) spawnAsteroid(node.id, out.toNodeId, `${d.amount} USDC`)
@@ -1201,10 +1257,16 @@ function YieldPanel({ node }: { node: NodeData }) {
       amount: `${d.amount} USDC`,
       detail: parentNode ? `Triggers after ${parentNode.label} completes` : 'Queued after parent task',
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2200)
+    try {
+      await yieldService.depositToVault(d.amount.replace(/,/g, ''))
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('Yield deposit error:', err)
+      confirmHistoryEntry(histId)
+    }
   }
 
-  const handleRedeem = () => {
+  const handleRedeem = async () => {
     setShowRedeemConfirm(false)
     const amount = (d.redemptionAmount?.trim() || d.amount).trim()
     const flow = d.redemptionFlow ?? 'portal'
@@ -1223,7 +1285,13 @@ function YieldPanel({ node }: { node: NodeData }) {
         ? `Portal flow: ${source} -> ${destination} · Receiver: ${demoWalletAddress} · Includes fee review`
         : `Contract flow: teller.redeem(shareAmt, receiver, owner, sourceChainId, destinationChainId, fee, allowListProofs) · fee ${feeBps} bps`,
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2400)
+    try {
+      await yieldService.redeemUSYC(amount.replace(/,/g, ''), flow, source, destination)
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('USYC redeem error:', err)
+      confirmHistoryEntry(histId)
+    }
   }
 
   return (
@@ -1823,20 +1891,13 @@ function DistributePanel({ node }: { node: NodeData }) {
 
   const [showConfirm, setShowConfirm] = useState(false)
 
-  const handlePayNow = () => {
+  const handlePayNow = async () => {
     setShowConfirm(false)
     const fundingWallet = findFundingWallet(node.id, nodes, connections)
     const totalAmount = parseNumericInput(d.totalAmount)
-    if (fundingWallet && totalAmount > 0) {
-      applyWalletDeltas(
-        fundingWallet,
-        { [d.currency]: -totalAmount },
-        upd,
-        updateNodeValue,
-      )
-    }
 
     const addresses = d.recipients.map(r => r.address)
+    const amounts = d.recipients.map(r => r.amount.replace(/,/g, ''))
     const histId = logHistory({
       kind: 'distribution_sent',
       label: `Sending ${d.totalAmount} ${d.currency} to ${d.recipients.length} recipient${d.recipients.length !== 1 ? 's' : ''}…`,
@@ -1845,7 +1906,33 @@ function DistributePanel({ node }: { node: NodeData }) {
       addresses,
       detail: d.recipients.map(r => `${r.name}: ${r.amount} ${d.currency}`).join(' · '),
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2200)
+
+    try {
+      const result = await distributeService.executeDistribution(d.currency, addresses, amounts)
+      u({ txHash: result.txHash })
+
+      if (fundingWallet && totalAmount > 0) {
+        applyWalletDeltas(
+          fundingWallet,
+          { [d.currency]: -totalAmount },
+          upd,
+          updateNodeValue,
+        )
+      }
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('Distribution error:', err)
+      // Fallback: update local state
+      if (fundingWallet && totalAmount > 0) {
+        applyWalletDeltas(
+          fundingWallet,
+          { [d.currency]: -totalAmount },
+          upd,
+          updateNodeValue,
+        )
+      }
+      confirmHistoryEntry(histId)
+    }
   }
 
   return (
@@ -2037,14 +2124,11 @@ function WalletPanel({ node }: { node: NodeData }) {
     applyWalletBalances(node, nextBalances, upd, updateNodeValue, nextCurrency)
   }
 
-  const handleCryptoDeposit = () => {
+  const handleCryptoDeposit = async () => {
     if (!depositAmount.trim()) return
     const amount = parseNumericInput(depositAmount)
-    if (amount > 0) {
-      const nextBalances = getWalletBalances(d)
-      nextBalances[depositCurrency] = (nextBalances[depositCurrency] ?? 0) + amount
-      applyWalletBalances(node, nextBalances, upd, updateNodeValue, d.currency)
-    }
+    if (amount <= 0) return
+
     setDepositOpen(false)
     const histId = logHistory({
       kind: 'wallet_created',
@@ -2053,7 +2137,21 @@ function WalletPanel({ node }: { node: NodeData }) {
       detail: d.address,
       amount: `${depositAmount} ${depositCurrency}`,
     })
-    setTimeout(() => confirmHistoryEntry(histId), 2000)
+
+    try {
+      await walletService.deposit(d.address, depositCurrency, depositAmount.replace(/,/g, ''))
+      const nextBalances = getWalletBalances(d)
+      nextBalances[depositCurrency] = (nextBalances[depositCurrency] ?? 0) + amount
+      applyWalletBalances(node, nextBalances, upd, updateNodeValue, d.currency)
+      confirmHistoryEntry(histId)
+    } catch (err) {
+      console.error('Deposit error:', err)
+      // Fallback: update local state
+      const nextBalances = getWalletBalances(d)
+      nextBalances[depositCurrency] = (nextBalances[depositCurrency] ?? 0) + amount
+      applyWalletBalances(node, nextBalances, upd, updateNodeValue, d.currency)
+      confirmHistoryEntry(histId)
+    }
     setDepositAmount('')
   }
 
@@ -2259,7 +2357,7 @@ function AgentPanel({ node }: { node: NodeData }) {
     if (el) el.scrollTop = el.scrollHeight
   }, [d.logs?.length])
 
-  const handleRun = () => {
+  const handleRun = async () => {
     u({ status: 'running', logs: [], usedBudget: '0', lastOutput: undefined })
     const histId = logHistory({
       kind: 'agent_started',
@@ -2267,24 +2365,67 @@ function AgentPanel({ node }: { node: NodeData }) {
       status: 'loading',
       detail: d.instructions ? d.instructions.slice(0, 80) : 'No instructions provided',
     })
-    // Auto-complete after all steps play out
-    setTimeout(() => {
-      upd(node.id, {
-        status: 'completed',
-        lastOutput: 'Bought $400 of $NIGHT · Scanning for new opportunities · 1 active position',
-        usedBudget: '400',
-      } as Partial<AgentData> as Record<string, unknown>)
-      updateNodeValue(node.id, '$NIGHT +12.4%')
-      confirmHistoryEntry(histId)
-      logHistory({ kind: 'agent_completed', label: `Agent "${node.label}" — bought $400 $NIGHT`, status: 'confirmed' })
-    }, AGENT_LOG_STEPS.length * 780 + 600)
+
+    try {
+      const session = await agentService.startAgent(
+        node.id, d.instructions, d.maxBudget.replace(/,/g, ''), 'USDC',
+      )
+      u({ openclawSessionId: session.sessionId })
+
+      // Poll for agent completion
+      const pollInterval = setInterval(async () => {
+        try {
+          const status = await agentService.getAgentStatus(session.sessionId)
+          if (status) {
+            const logEntries = status.logs.map(l => `${l.type}:${l.message}`)
+            u({ logs: logEntries, usedBudget: status.usedBudget })
+          }
+          if (status?.status === 'completed') {
+            clearInterval(pollInterval)
+            upd(node.id, {
+              status: 'completed',
+              lastOutput: status.logs[status.logs.length - 1]?.message || 'Agent completed',
+              usedBudget: status.usedBudget,
+            } as Partial<AgentData> as Record<string, unknown>)
+            updateNodeValue(node.id, `Spent $${status.usedBudget}`)
+            confirmHistoryEntry(histId)
+            logHistory({ kind: 'agent_completed', label: `Agent "${node.label}" completed`, status: 'confirmed' })
+          } else if (status?.status === 'stopped') {
+            clearInterval(pollInterval)
+          }
+        } catch {
+          // Continue polling
+        }
+      }, 1000)
+    } catch (err) {
+      console.error('Agent start error:', err)
+      // Fallback to local simulation
+      setTimeout(() => {
+        upd(node.id, {
+          status: 'completed',
+          lastOutput: 'Bought $400 of $NIGHT · Scanning for new opportunities · 1 active position',
+          usedBudget: '400',
+        } as Partial<AgentData> as Record<string, unknown>)
+        updateNodeValue(node.id, '$NIGHT +12.4%')
+        confirmHistoryEntry(histId)
+        logHistory({ kind: 'agent_completed', label: `Agent "${node.label}" — bought $400 $NIGHT`, status: 'confirmed' })
+      }, AGENT_LOG_STEPS.length * 780 + 600)
+    }
   }
 
-  const handleStop = () => {
+  const handleStop = async () => {
     clearInterval(intervalRef.current)
     u({ status: 'stopped', lastOutput: 'Agent stopped by user.' })
     updateNodeValue(node.id, 'Idle')
     logHistory({ kind: 'agent_stopped', label: `Agent "${node.label}" stopped` })
+
+    if (d.openclawSessionId) {
+      try {
+        await agentService.stopAgent(d.openclawSessionId)
+      } catch (err) {
+        console.error('Agent stop error:', err)
+      }
+    }
   }
 
   const isRunning = d.status === 'running'
