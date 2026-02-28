@@ -144,6 +144,25 @@ function getUpstreamMax(nodeId: string, asset: string, nodes: NodeData[], connec
   }
 }
 
+/** Get the output asset of the immediate upstream (parent) node, or null. */
+function getUpstreamAsset(nodeId: string, nodes: NodeData[], connections: Connection[]): string | null {
+  const incoming = connections.find(c => c.toNodeId === nodeId)
+  if (!incoming) return null
+  const parent = nodes.find(n => n.id === incoming.fromNodeId)
+  if (!parent) return null
+
+  switch (parent.type) {
+    case 'wallet': return (parent.data as WalletData).currency
+    case 'swap': {
+      const sd = parent.data as SwapData
+      return sd.mode === 'crypto' ? sd.toToken : sd.toStable
+    }
+    case 'yield': return (parent.data as YieldData).idleAsset
+    case 'distribute': return (parent.data as DistributeData).currency
+    case 'agent': return 'USDC'
+  }
+}
+
 function computeNodeValue(node: NodeData): string {
   switch (node.type) {
     case 'swap': {
@@ -945,6 +964,11 @@ function SwapPanel({ node }: { node: NodeData }) {
   const fromAssetKey = d.mode === 'crypto' ? d.fromToken : d.fromStable
   const swapUpstreamMax = getUpstreamMax(node.id, fromAssetKey, nodes, connections)
 
+  // Keep the node value label in sync with data changes
+  useEffect(() => {
+    updateNodeValue(node.id, computeNodeValue(node))
+  }, [d.mode, d.amount, d.fromToken, d.toToken, d.fromStable, d.toStable])
+
   // Compute output destination: look for downstream connections from this swap node
   const outgoingConn = connections.find(c => c.fromNodeId === node.id)
   const outputNode = outgoingConn ? nodes.find(n => n.id === outgoingConn.toNodeId) : null
@@ -1110,11 +1134,16 @@ function YieldPanel({ node }: { node: NodeData }) {
   const meta = NODE_TYPE_META[node.type]
   const nodes = useGraphStore(s => s.nodes)
   const upd = useGraphStore(s => s.updateNodeData)
+  const updateNodeValue = useGraphStore(s => s.updateNodeValue)
   const spawnAsteroid = useGraphStore(s => s.spawnAsteroid)
   const connections = useGraphStore(s => s.connections)
   const logHistory = useGraphStore(s => s.logHistory)
   const confirmHistoryEntry = useGraphStore(s => s.confirmHistoryEntry)
   const u = (p: Partial<YieldData>) => upd(node.id, p as Record<string, unknown>)
+
+  useEffect(() => {
+    updateNodeValue(node.id, computeNodeValue(node))
+  }, [d.mode, d.apy, d.currentYield])
   const yieldUpstreamMax = getUpstreamMax(node.id, d.idleAsset ?? 'USDC', nodes, connections)
 
   const demoWallet = nodes.find(n => n.id === 'wallet_anchor' && n.type === 'wallet')
@@ -1779,6 +1808,18 @@ function DistributePanel({ node }: { node: NodeData }) {
   const setR = (i: number, field: string, val: string) =>
     u({ recipients: d.recipients.map((r, idx) => idx === i ? { ...r, [field]: val } : r) })
   const distUpstreamMax = getUpstreamMax(node.id, d.currency, nodes, connections)
+  const upstreamAsset = getUpstreamAsset(node.id, nodes, connections)
+
+  // Auto-default currency to match upstream node's output asset
+  useEffect(() => {
+    if (upstreamAsset && upstreamAsset !== d.currency) {
+      u({ currency: upstreamAsset })
+    }
+  }, [upstreamAsset])
+
+  useEffect(() => {
+    updateNodeValue(node.id, computeNodeValue(node))
+  }, [d.totalAmount, d.schedule])
 
   const [showConfirm, setShowConfirm] = useState(false)
 
@@ -1824,7 +1865,11 @@ function DistributePanel({ node }: { node: NodeData }) {
         <div className="grid grid-cols-2 gap-2">
           <AmountField label="Total amount" value={d.totalAmount} onChange={v => u({ totalAmount: v })} color={meta.glow} upstreamMax={distUpstreamMax} />
           <Field label="Currency" value={d.currency} onChange={v => u({ currency: v })}
-            type="select" options={['USDC', 'USDT', 'DAI', 'ETH']} color={meta.glow} />
+            type="select" options={(() => {
+              const base = ['USDC', 'USDT', 'EURC', 'DAI', 'ETH']
+              if (upstreamAsset && !base.includes(upstreamAsset)) base.splice(1, 0, upstreamAsset)
+              return base
+            })()} color={meta.glow} />
         </div>
 
         {d.mode === 'payroll' && (
