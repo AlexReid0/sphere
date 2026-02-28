@@ -16,6 +16,7 @@ const KIND_META: Record<HistoryEntry['kind'], { icon: string; color: string }> =
   distribution_sent:  { icon: '→', color: '#D97706' },
   swap_executed:      { icon: '⇄', color: '#EA580C' },
   yield_deployed:     { icon: '↗', color: '#0D9488' },
+  yield_deployed_usdc: { icon: '⚡', color: '#0D9488' },
   usyc_redeemed:      { icon: '↓', color: '#0369A1' },
   wallet_created:     { icon: '◉', color: '#1D4ED8' },
   agent_started:      { icon: '◈', color: '#6366F1' },
@@ -171,7 +172,7 @@ function HistoryTab({ history, onClear }: { history: HistoryEntry[]; onClear: ()
 interface UpcomingItem {
   id: string
   nodeLabel: string
-  type: 'distribution' | 'yield_maturity' | 'swap_unlock' | 'yield_auto'
+  type: 'distribution' | 'yield_maturity' | 'swap_unlock' | 'yield_auto' | 'swap_scheduled'
   title: string
   subtitle: string
   amount: string
@@ -214,23 +215,48 @@ function computeUpcoming(nodes: ReturnType<typeof useGraphStore.getState>['nodes
   for (const node of nodes) {
     if (node.type === 'distribute') {
       const d = node.data as DistributeData
-      const nextDate = computeNextDate(d.schedule, d.executionDay)
+      let subtitle: string
+      let icon = '→'
+      if (d.schedule === 'One-time') {
+        if (d.trigger === 'after_parent') {
+          subtitle = `Triggers after parent action completes`
+          icon = '⚡'
+        } else if (d.oneTimeDate) {
+          subtitle = `One-time on ${new Date(d.oneTimeDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+        } else {
+          subtitle = `One-time · No date set`
+        }
+      } else {
+        const nextDate = computeNextDate(d.schedule, d.executionDay)
+        subtitle = `${d.recipients.length} recipient${d.recipients.length !== 1 ? 's' : ''} · Next: ${nextDate}`
+      }
       items.push({
         id: `upcoming_${node.id}`,
         nodeLabel: node.label,
         type: 'distribution',
         title: node.label,
-        subtitle: `${d.recipients.length} recipient${d.recipients.length !== 1 ? 's' : ''} · Next: ${nextDate}`,
+        subtitle,
         amount: `${d.totalAmount} ${d.currency}`,
         schedule: d.schedule,
         color: NODE_TYPE_META.distribute.glow,
-        icon: '→',
+        icon,
       })
     }
 
     if (node.type === 'yield') {
       const d = node.data as YieldData
-      if (d.mode === 'rwa' && d.maturityDate) {
+      if (d.mode === 'rwa' && d.trigger === 'after_parent') {
+        items.push({
+          id: `upcoming_yield_usdc_${node.id}`,
+          nodeLabel: node.label,
+          type: 'yield_maturity',
+          title: node.label,
+          subtitle: `Deploy to USDC after parent completes`,
+          amount: `${d.amount} ${d.idleAsset} → USDC`,
+          color: NODE_TYPE_META.yield.glow,
+          icon: '⚡',
+        })
+      } else if (d.mode === 'rwa' && d.maturityDate) {
         items.push({
           id: `upcoming_rwa_${node.id}`,
           nodeLabel: node.label,
@@ -270,6 +296,22 @@ function computeUpcoming(nodes: ReturnType<typeof useGraphStore.getState>['nodes
           dueDate: d.lockTime,
           color: NODE_TYPE_META.swap.glow,
           icon: '⇄',
+        })
+      }
+      if (d.schedule && d.schedule !== 'One-time') {
+        const nextDate = computeNextDate(d.schedule, d.executionDay)
+        const fromAsset = d.mode === 'crypto' ? d.fromToken : d.fromStable
+        const toAsset = d.mode === 'crypto' ? d.toToken : d.toStable
+        items.push({
+          id: `upcoming_swap_sched_${node.id}`,
+          nodeLabel: node.label,
+          type: 'swap_scheduled',
+          title: node.label,
+          subtitle: `${d.schedule} · Next: ${nextDate}`,
+          amount: `${d.amount} ${fromAsset} → ${toAsset}`,
+          schedule: d.schedule,
+          color: NODE_TYPE_META.swap.glow,
+          icon: '⏱',
         })
       }
     }

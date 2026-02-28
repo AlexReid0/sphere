@@ -112,13 +112,45 @@ function findFundingWallet(nodeId: string, nodes: NodeData[], connections: Conne
   return null
 }
 
+/** Get the max available amount from the immediate upstream (parent) node for a given asset. */
+function getUpstreamMax(nodeId: string, asset: string, nodes: NodeData[], connections: Connection[]): number | null {
+  const incoming = connections.find(c => c.toNodeId === nodeId)
+  if (!incoming) return null
+  const parent = nodes.find(n => n.id === incoming.fromNodeId)
+  if (!parent) return null
+
+  switch (parent.type) {
+    case 'wallet': {
+      const wd = parent.data as WalletData
+      const balances = getWalletBalances(wd)
+      return balances[asset] ?? balances[wd.currency] ?? 0
+    }
+    case 'swap': {
+      const sd = parent.data as SwapData
+      return parseNumericInput(sd.amount)
+    }
+    case 'yield': {
+      const yd = parent.data as YieldData
+      return parseNumericInput(yd.amount)
+    }
+    case 'distribute': {
+      const dd = parent.data as DistributeData
+      return parseNumericInput(dd.totalAmount)
+    }
+    case 'agent': {
+      const ad = parent.data as AgentData
+      return parseNumericInput(ad.maxBudget)
+    }
+  }
+}
+
 function computeNodeValue(node: NodeData): string {
   switch (node.type) {
     case 'swap': {
       const d = node.data as SwapData
       return d.mode === 'crypto'
-        ? `${formatAmount(d.amount)} ${d.fromToken}`
-        : `${d.fromStable}→${d.toStable}`
+        ? `${formatAmount(d.amount)} ${d.fromToken} → ${d.toToken}`
+        : `${formatAmount(d.amount)} ${d.fromStable} → ${d.toStable}`
     }
     case 'yield': {
       const d = node.data as YieldData
@@ -250,6 +282,58 @@ function Field({
           onChange={e => onChange?.(e.target.value)}
           style={{ ...INPUT_BASE, color: c, cursor: readOnly ? 'default' : 'text' }} />
       )}
+    </div>
+  )
+}
+
+/** Amount field with upstream cap: shows "Available: X" and clamps input to max. */
+function AmountField({
+  label, value, onChange, color, upstreamMax,
+}: {
+  label: string; value: string; onChange: (v: string) => void; color?: string; upstreamMax: number | null
+}) {
+  const c = color || '#1E293B'
+  const parsed = parseNumericInput(value)
+  const overMax = upstreamMax !== null && parsed > upstreamMax
+
+  const handleChange = (raw: string) => {
+    const n = parseNumericInput(raw)
+    if (upstreamMax !== null && n > upstreamMax) {
+      onChange(formatNumericInput(upstreamMax))
+    } else {
+      onChange(raw)
+    }
+  }
+
+  return (
+    <div className="p-2 rounded-xl"
+      style={{
+        background: overMax ? 'rgba(239,68,68,0.06)' : 'rgba(0,0,0,0.03)',
+        border: `1px solid ${overMax ? 'rgba(239,68,68,0.25)' : 'rgba(0,0,0,0.07)'}`,
+      }}>
+      <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+        <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>
+          {label.toUpperCase()}
+        </span>
+        {upstreamMax !== null && (
+          <button
+            onClick={() => onChange(formatNumericInput(upstreamMax))}
+            style={{
+              fontSize: 8, fontFamily: 'monospace', letterSpacing: '0.04em',
+              color: c, opacity: 0.7, cursor: 'pointer', background: 'none', border: 'none', padding: 0,
+            }}
+            className="hover:opacity-100 transition-opacity"
+          >
+            MAX {formatNumericInput(upstreamMax)}
+          </button>
+        )}
+      </div>
+      <input
+        type="text"
+        value={value}
+        onChange={e => handleChange(e.target.value)}
+        style={{ ...INPUT_BASE, color: c, cursor: 'text' }}
+      />
     </div>
   )
 }
@@ -466,16 +550,100 @@ function TenorSelector({
   )
 }
 
+// ─── After-parent trigger (shared for crypto + stableFX swaps) ───────────────
+
+function SwapParentTrigger({
+  node, d, u, meta,
+}: {
+  node: NodeData
+  d: SwapData
+  u: (p: Partial<SwapData>) => void
+  meta: typeof NODE_TYPE_META[keyof typeof NODE_TYPE_META]
+}) {
+  const nodes = useGraphStore(s => s.nodes)
+  const connections = useGraphStore(s => s.connections)
+  const trigger = d.trigger ?? 'date'
+
+  const incomingConn = connections.find(c => c.toNodeId === node.id)
+  const parentNode = incomingConn ? nodes.find(n => n.id === incomingConn.fromNodeId) : null
+  const parentIsScheduled = parentNode && (parentNode.type === 'swap' || parentNode.type === 'yield' || parentNode.type === 'distribute' || parentNode.type === 'wallet')
+
+  return (
+    <div className="space-y-2">
+      {/* Trigger tabs */}
+      <div className="flex gap-1.5">
+        <button
+          onClick={() => u({ trigger: 'date' })}
+          className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+          style={{
+            background: trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.03)',
+            border: `1px solid ${trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+            color: trigger === 'date' ? '#fff' : '#64748B',
+            fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+          }}
+        >
+          📅 On schedule
+        </button>
+        <button
+          onClick={() => u({ trigger: 'after_parent' })}
+          className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+          style={{
+            background: trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.03)',
+            border: `1px solid ${trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+            color: trigger === 'after_parent' ? '#fff' : '#64748B',
+            fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+          }}
+        >
+          ⚡ After parent
+        </button>
+      </div>
+
+      {/* After parent info */}
+      {trigger === 'after_parent' && (
+        <div className="px-3 py-2.5 rounded-xl space-y-1"
+          style={{ background: `${meta.glow}0A`, border: `1px solid ${meta.glow}22` }}>
+          {parentIsScheduled ? (
+            <>
+              <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>
+                TRIGGERS AFTER
+              </div>
+              <div className="flex items-center gap-2">
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%',
+                  background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.55) 18%, ${NODE_TYPE_META[parentNode!.type].color2} 52%, ${NODE_TYPE_META[parentNode!.type].color1} 100%)`,
+                  flexShrink: 0,
+                }} />
+                <span style={{ fontSize: 11, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 600 }}>
+                  {parentNode!.label}
+                </span>
+                <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace' }}>completes</span>
+              </div>
+              <div style={{ fontSize: 8, color: '#94A3B8', fontFamily: 'monospace', paddingTop: 2 }}>
+                Executes immediately after the parent action finalises
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 10, color: '#94A3B8', fontFamily: 'monospace', textAlign: 'center', padding: '4px 0' }}>
+              Connect a node upstream to use this trigger
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── StableFX subpanel (Circle) ───────────────────────────────────────────────
 
 function StableFXPanel({
-  node, d, u, meta, onExecute,
+  node, d, u, meta, onExecute, upstreamMax,
 }: {
   node: NodeData
   d: SwapData
   u: (p: Partial<SwapData>) => void
   meta: typeof NODE_TYPE_META[keyof typeof NODE_TYPE_META]
   onExecute: () => void
+  upstreamMax: number | null
 }) {
   const [quoteStatus, setQuoteStatus] = useState<'idle' | 'loading' | 'ready' | 'expired'>('idle')
   const [quoteSeconds, setQuoteSeconds] = useState(30)
@@ -531,15 +699,38 @@ function StableFXPanel({
         onChange={v => handleCoinChange('fromStable', v)} color={meta.glow} />
 
       {/* Amount field */}
-      <div className="p-2 rounded-xl" style={{ background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.07)' }}>
-        <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', marginBottom: 3, letterSpacing: '0.06em' }}>
-          AMOUNT
+      <div className="p-2 rounded-xl" style={{
+        background: upstreamMax !== null && parseNumericInput(d.amount) > upstreamMax ? 'rgba(239,68,68,0.06)' : 'rgba(0,0,0,0.03)',
+        border: `1px solid ${upstreamMax !== null && parseNumericInput(d.amount) > upstreamMax ? 'rgba(239,68,68,0.25)' : 'rgba(0,0,0,0.07)'}`,
+      }}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 3 }}>
+          <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>
+            AMOUNT
+          </span>
+          {upstreamMax !== null && (
+            <button
+              onClick={() => { u({ amount: formatNumericInput(upstreamMax), quoteId: undefined }); setQuoteStatus('idle') }}
+              style={{ fontSize: 8, fontFamily: 'monospace', letterSpacing: '0.04em', color: meta.glow, opacity: 0.7, cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+              className="hover:opacity-100 transition-opacity"
+            >
+              MAX {formatNumericInput(upstreamMax)}
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <input
             type="number"
             value={d.amount}
-            onChange={e => { u({ amount: e.target.value, quoteId: undefined }); setQuoteStatus('idle') }}
+            onChange={e => {
+              const raw = e.target.value
+              const n = parseNumericInput(raw)
+              if (upstreamMax !== null && n > upstreamMax) {
+                u({ amount: formatNumericInput(upstreamMax), quoteId: undefined })
+              } else {
+                u({ amount: raw, quoteId: undefined })
+              }
+              setQuoteStatus('idle')
+            }}
             style={{ ...INPUT_BASE, color: meta.glow, fontSize: 13, fontWeight: 600 }}
             placeholder="0.00"
           />
@@ -564,6 +755,54 @@ function StableFXPanel({
         onChange={v => handleCoinChange('toStable', v)} color={meta.glow} />
 
       <TenorSelector value={tenor} onChange={v => u({ tenor: v })} color={meta.glow} />
+
+      {/* Schedule / trigger for StableFX */}
+      <div className="space-y-2">
+        <SwapParentTrigger node={node} d={d} u={u} meta={meta} />
+        {/* Date picker — only when trigger is 'date' (default) */}
+        {(d.trigger ?? 'date') === 'date' && (
+          <div className="p-2 rounded-xl" style={{ background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.07)' }}>
+            <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', marginBottom: 4, letterSpacing: '0.06em' }}>
+              SCHEDULE DATE
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="date"
+                value={d.executionDay ?? ''}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={e => u({ executionDay: e.target.value || undefined, schedule: e.target.value ? 'scheduled' : 'One-time' })}
+                style={{
+                  flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                  fontFamily: 'Space Mono, monospace', fontSize: 11,
+                  color: d.executionDay ? meta.glow : '#94A3B8', cursor: 'pointer',
+                }}
+              />
+              {d.executionDay && (
+                <button
+                  onClick={() => u({ executionDay: undefined, schedule: 'One-time' })}
+                  style={{ fontSize: 13, color: '#CBD5E1', lineHeight: 1 }}
+                  title="Clear date"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+            {!d.executionDay && (
+              <div style={{ fontSize: 8, color: '#CBD5E1', fontFamily: 'monospace', marginTop: 2 }}>
+                Leave empty to execute on quote confirmation
+              </div>
+            )}
+            {d.executionDay && (
+              <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }}>
+                <span style={{ fontSize: 8, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>EXECUTES ON</span>
+                <span style={{ fontSize: 10, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 600 }}>
+                  {new Date(d.executionDay + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Quote box */}
       {quoteStatus === 'idle' && (
@@ -668,7 +907,7 @@ function StableFXPanel({
                 className="w-full py-2.5 rounded-xl text-xs font-semibold transition-all hover:scale-[1.01] active:scale-[0.99]"
                 style={{ background: meta.glow, color: '#fff', fontFamily: 'Space Grotesk, sans-serif', boxShadow: `0 2px 12px ${meta.glow}44` }}
               >
-                Execute Trade · {fromCoin.flag} {d.amount} {fromCoin.symbol} → {toCoin.flag} {receiveAmt.toFixed(2)} {toCoin.symbol}
+                {d.trigger === 'after_parent' ? '⚡ Queue After Parent' : (d.schedule && d.schedule !== 'One-time') ? '⏱ Schedule Trade' : 'Execute Trade'} · {fromCoin.flag} {d.amount} {fromCoin.symbol} → {toCoin.flag} {receiveAmt.toFixed(2)} {toCoin.symbol}
               </button>
             </div>
           )}
@@ -702,6 +941,9 @@ function SwapPanel({ node }: { node: NodeData }) {
   const u = (p: Partial<SwapData>) => upd(node.id, p as Record<string, unknown>)
 
   const [showConfirm, setShowConfirm] = useState(false)
+
+  const fromAssetKey = d.mode === 'crypto' ? d.fromToken : d.fromStable
+  const swapUpstreamMax = getUpstreamMax(node.id, fromAssetKey, nodes, connections)
 
   // Compute output destination: look for downstream connections from this swap node
   const outgoingConn = connections.find(c => c.fromNodeId === node.id)
@@ -781,16 +1023,27 @@ function SwapPanel({ node }: { node: NodeData }) {
             <div className="grid grid-cols-2 gap-2">
               <Field label="From" value={d.fromToken} onChange={v => u({ fromToken: v })} type="select" options={TOKENS} color={meta.glow} />
               <Field label="To" value={d.toToken} onChange={v => u({ toToken: v })} type="select" options={TOKENS} color={meta.glow} />
-              <Field label="Amount" value={d.amount} onChange={v => u({ amount: v })} color={meta.glow} />
+              <AmountField label="Amount" value={d.amount} onChange={v => u({ amount: v })} color={meta.glow} upstreamMax={swapUpstreamMax} />
               <Field label="Slippage %" value={d.slippage} onChange={v => u({ slippage: v })} type="number" min={0} max={10} step={0.1} />
             </div>
             <Field label="Exchange rate" value={d.rate} onChange={v => u({ rate: v })} />
             <SectionDivider label="TIME LOCK" />
             <Toggle label="Time-lock swap" checked={!!d.timeLocked} onChange={v => u({ timeLocked: v })} />
             {d.timeLocked && <Field label="Unlock date" value={d.lockTime ?? ''} onChange={v => u({ lockTime: v })} type="date" />}
+            <SectionDivider label="SCHEDULE" />
+            <SchedulePicker
+              schedule={d.schedule ?? 'One-time'}
+              executionDay={d.executionDay}
+              onScheduleChange={v => u({ schedule: v, executionDay: undefined, trigger: undefined })}
+              onDayChange={v => u({ executionDay: v })}
+              color={meta.glow}
+            />
+            {(!d.schedule || d.schedule === 'One-time') && (
+              <SwapParentTrigger node={node} d={d} u={u} meta={meta} />
+            )}
             <SectionDivider />
             <ActionBtn onClick={() => setShowConfirm(true)} color={meta.glow} variant="solid">
-              ⇄ Execute Swap
+              {d.trigger === 'after_parent' ? '⚡ Queue After Parent' : (d.schedule && d.schedule !== 'One-time') ? '⏱ Schedule Swap' : '⇄ Execute Swap'}
             </ActionBtn>
             {/* Uniswap branding */}
             <div className="flex items-center justify-center gap-1.5 pt-1">
@@ -803,7 +1056,7 @@ function SwapPanel({ node }: { node: NodeData }) {
             </div>
           </>
         ) : (
-          <StableFXPanel node={node} d={d} u={u} meta={meta} onExecute={handleExecute} />
+          <StableFXPanel node={node} d={d} u={u} meta={meta} onExecute={handleExecute} upstreamMax={swapUpstreamMax} />
         )}
       </div>
 
@@ -849,7 +1102,7 @@ function Row({ label, value, color }: { label: string; value: string; color?: st
 const USYC_APPLY_LINK = 'https://help.circle.com/s/article/Investor-Onboarding?category=With_USYC&language=en_US'
 const USYC_PORTAL_DOCS_LINK = 'https://developers.circle.com/tokenized/usyc/subscribe-and-redeem-portal'
 const USYC_CONTRACT_DOCS_LINK = 'https://developers.circle.com/tokenized/usyc/subscribe-and-redeem'
-const USYC_REDEMPTION_CHAINS = ['Ethereum', 'BSC', 'Solana']
+const USYC_REDEMPTION_CHAINS = ['Arc', 'Ethereum', 'BSC', 'Solana']
 const USYC_CONTACT_MAILTO = 'mailto:alexleereid@gmail.com?subject=Already%20whitelisted%20for%20USYC&body=Hi%20Sphere%20team%2C%20I%20am%20already%20whitelisted%20for%20USYC%20and%20need%20help%20connecting%20my%20account.'
 
 function YieldPanel({ node }: { node: NodeData }) {
@@ -862,6 +1115,7 @@ function YieldPanel({ node }: { node: NodeData }) {
   const logHistory = useGraphStore(s => s.logHistory)
   const confirmHistoryEntry = useGraphStore(s => s.confirmHistoryEntry)
   const u = (p: Partial<YieldData>) => upd(node.id, p as Record<string, unknown>)
+  const yieldUpstreamMax = getUpstreamMax(node.id, d.idleAsset ?? 'USDC', nodes, connections)
 
   const demoWallet = nodes.find(n => n.id === 'wallet_anchor' && n.type === 'wallet')
   const demoWalletAddress = demoWallet && demoWallet.type === 'wallet'
@@ -869,13 +1123,17 @@ function YieldPanel({ node }: { node: NodeData }) {
     : '0x7f3a…d92b'
   const whitelistGranted = d.whitelistGranted ?? true
   const redemptionFlow = d.redemptionFlow ?? 'portal'
-  const redemptionAmount = d.redemptionAmount ?? d.amount
-  const redemptionSourceChain = d.redemptionSourceChain ?? 'Ethereum'
-  const redemptionDestinationChain = d.redemptionDestinationChain ?? 'Ethereum'
-  const redemptionFeeBps = d.redemptionFeeBps ?? '5'
+  const redemptionSourceChain = d.redemptionSourceChain ?? 'Arc'
+  const redemptionDestinationChain = d.redemptionDestinationChain ?? 'Arc'
+
+  const trigger = d.trigger ?? 'date'
+  const incomingConn = connections.find(c => c.toNodeId === node.id)
+  const parentNode = incomingConn ? nodes.find(n => n.id === incomingConn.fromNodeId) : null
+  const parentIsScheduled = parentNode && (parentNode.type === 'swap' || parentNode.type === 'yield' || parentNode.type === 'distribute' || parentNode.type === 'wallet')
 
   const [showHarvestConfirm, setShowHarvestConfirm] = useState(false)
   const [showDeployConfirm, setShowDeployConfirm] = useState(false)
+  const [showDeployUsdcConfirm, setShowDeployUsdcConfirm] = useState(false)
   const [showRedeemConfirm, setShowRedeemConfirm] = useState(false)
 
   const handleHarvest = () => {
@@ -901,6 +1159,20 @@ function YieldPanel({ node }: { node: NodeData }) {
       detail: `Maturity: ${d.maturityDate === 'forever' ? '∞ Forever' : d.maturityDate} · ${d.currentYield}% yield`,
     })
     setTimeout(() => confirmHistoryEntry(histId), 2000)
+  }
+
+  const handleDeployUsdc = () => {
+    setShowDeployUsdcConfirm(false)
+    const out = connections.find(c => c.fromNodeId === node.id)
+    if (out) spawnAsteroid(node.id, out.toNodeId, `${d.amount} USDC`)
+    const histId = logHistory({
+      kind: 'yield_deployed_usdc',
+      label: `Deploying ${d.amount} USDC after parent executes…`,
+      status: 'loading',
+      amount: `${d.amount} USDC`,
+      detail: parentNode ? `Triggers after ${parentNode.label} completes` : 'Queued after parent task',
+    })
+    setTimeout(() => confirmHistoryEntry(histId), 2200)
   }
 
   const handleRedeem = () => {
@@ -952,42 +1224,8 @@ function YieldPanel({ node }: { node: NodeData }) {
             <div className="grid grid-cols-2 gap-2">
               <Field label="Idle asset" value={d.idleAsset} onChange={v => u({ idleAsset: v })}
                 type="select" options={['USDC', 'USDT', 'DAI']} color={meta.glow} />
-              <Field label="Amount $" value={d.amount} onChange={v => u({ amount: v })} color={meta.glow} />
+              <AmountField label="Amount $" value={d.amount} onChange={v => u({ amount: v })} color={meta.glow} upstreamMax={yieldUpstreamMax} />
               <Field label="Yield %" value={d.currentYield} onChange={v => u({ currentYield: v })} type="number" step={0.01} color={meta.glow} />
-              {d.maturityDate === 'forever' ? (
-                <div className="flex flex-col gap-1">
-                  <label style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>MATURITY</label>
-                  <button
-                    onClick={() => u({ maturityDate: new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10) })}
-                    className="flex items-center justify-between px-2.5 py-1.5 rounded-lg w-full text-left"
-                    style={{ background: `${meta.glow}15`, border: `1px solid ${meta.glow}33`, fontSize: 11, color: meta.glow, fontFamily: 'Space Mono, monospace', fontWeight: 600 }}
-                  >
-                    <span>∞ Forever</span>
-                    <span style={{ fontSize: 9, color: '#94A3B8' }}>change</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  <label style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>MATURITY</label>
-                  <div className="flex gap-1">
-                    <input
-                      type="date"
-                      value={d.maturityDate}
-                      onChange={e => u({ maturityDate: e.target.value })}
-                      className="flex-1 px-2 py-1.5 rounded-lg text-xs"
-                      style={{ background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.1)', color: '#1E293B', fontFamily: 'Space Mono, monospace', fontSize: 10 }}
-                    />
-                    <button
-                      onClick={() => u({ maturityDate: 'forever' })}
-                      className="px-2 py-1 rounded-lg text-xs flex-shrink-0"
-                      style={{ background: `${meta.glow}10`, border: `1px solid ${meta.glow}25`, color: meta.glow, fontFamily: 'monospace', fontSize: 9 }}
-                      title="Set as forever"
-                    >
-                      ∞
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
             <div className="rounded-xl p-3 space-y-2" style={{ background: `${meta.glow}10`, border: `1px solid ${meta.glow}2E` }}>
               <div className="flex items-center justify-between">
@@ -1034,8 +1272,6 @@ function YieldPanel({ node }: { node: NodeData }) {
               color={meta.glow}
             />
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Redeem amount" value={redemptionAmount} onChange={v => u({ redemptionAmount: v })} color={meta.glow} />
-              <Field label="Fee (bps)" value={redemptionFeeBps} onChange={v => u({ redemptionFeeBps: v })} type="number" min={0} max={1000} step={1} />
               <Field
                 label="Source chain"
                 value={redemptionSourceChain}
@@ -1080,21 +1316,91 @@ function YieldPanel({ node }: { node: NodeData }) {
             <SectionDivider label="CONVERSION PROGRESS" />
             <Slider label="Progress" value={d.conversionProgress} min={0} max={100} step={1}
               onChange={v => u({ conversionProgress: v })} formatVal={v => `${v}%`} color={meta.glow} />
+
+            <SectionDivider label="DEPLOY TRIGGER" />
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => u({ trigger: 'date' })}
+                className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+                style={{
+                  background: trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.03)',
+                  border: `1px solid ${trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+                  color: trigger === 'date' ? '#fff' : '#64748B',
+                  fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+                }}
+              >
+                📅 On schedule
+              </button>
+              <button
+                onClick={() => u({ trigger: 'after_parent' })}
+                className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+                style={{
+                  background: trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.03)',
+                  border: `1px solid ${trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+                  color: trigger === 'after_parent' ? '#fff' : '#64748B',
+                  fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+                }}
+              >
+                ⚡ After parent
+              </button>
+            </div>
+
+            {trigger === 'after_parent' && (
+              <div className="px-3 py-2.5 rounded-xl space-y-1"
+                style={{ background: `${meta.glow}0A`, border: `1px solid ${meta.glow}22` }}>
+                {parentIsScheduled ? (
+                  <>
+                    <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>
+                      DEPLOYS TO USDC AFTER
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div style={{
+                        width: 18, height: 18, borderRadius: '50%',
+                        background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.55) 18%, ${NODE_TYPE_META[parentNode!.type].color2} 52%, ${NODE_TYPE_META[parentNode!.type].color1} 100%)`,
+                        flexShrink: 0,
+                      }} />
+                      <span style={{ fontSize: 11, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 600 }}>
+                        {parentNode!.label}
+                      </span>
+                      <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace' }}>completes</span>
+                    </div>
+                    <div style={{ fontSize: 8, color: '#94A3B8', fontFamily: 'monospace', paddingTop: 2 }}>
+                      Deploys {d.amount} {d.idleAsset} → USDC after parent finalises
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10, color: '#94A3B8', fontFamily: 'monospace', textAlign: 'center', padding: '4px 0' }}>
+                    Connect a node upstream to use this trigger
+                  </div>
+                )}
+              </div>
+            )}
+
             <SectionDivider />
-            <ActionBtn onClick={() => setShowDeployConfirm(true)} color={meta.glow} variant="solid">
-              ↗ Deploy to USYC
-            </ActionBtn>
+            {trigger === 'after_parent' ? (
+              <ActionBtn
+                onClick={() => setShowDeployUsdcConfirm(true)}
+                color={meta.glow}
+                variant="solid"
+              >
+                ⚡ Deploy to USDC · After Parent
+              </ActionBtn>
+            ) : (
+              <ActionBtn onClick={() => setShowDeployConfirm(true)} color={meta.glow} variant="solid">
+                ↗ Deploy to USYC
+              </ActionBtn>
+            )}
             <button
               onClick={() => setShowRedeemConfirm(true)}
-              disabled={!whitelistGranted || parseNumericInput(redemptionAmount) <= 0}
+              disabled={!whitelistGranted || parseNumericInput(d.amount) <= 0}
               className="w-full py-2 rounded-xl text-xs font-semibold transition-all duration-150"
               style={{
-                background: (!whitelistGranted || parseNumericInput(redemptionAmount) <= 0) ? 'rgba(0,0,0,0.05)' : '#0369A1',
+                background: (!whitelistGranted || parseNumericInput(d.amount) <= 0) ? 'rgba(0,0,0,0.05)' : '#0369A1',
                 border: '1px solid rgba(0,0,0,0.08)',
-                color: (!whitelistGranted || parseNumericInput(redemptionAmount) <= 0) ? '#94A3B8' : '#fff',
+                color: (!whitelistGranted || parseNumericInput(d.amount) <= 0) ? '#94A3B8' : '#fff',
                 fontFamily: 'Space Grotesk, sans-serif',
-                boxShadow: (!whitelistGranted || parseNumericInput(redemptionAmount) <= 0) ? 'none' : '0 2px 10px rgba(3,105,161,0.35)',
-                cursor: (!whitelistGranted || parseNumericInput(redemptionAmount) <= 0) ? 'not-allowed' : 'pointer',
+                boxShadow: (!whitelistGranted || parseNumericInput(d.amount) <= 0) ? 'none' : '0 2px 10px rgba(3,105,161,0.35)',
+                cursor: (!whitelistGranted || parseNumericInput(d.amount) <= 0) ? 'not-allowed' : 'pointer',
               }}
             >
               ↓ Redeem USYC (UI)
@@ -1140,7 +1446,28 @@ function YieldPanel({ node }: { node: NodeData }) {
                   <Row label="Asset" value={d.idleAsset} />
                   <Row label="Amount" value={`$${d.amount}`} color={meta.glow} />
                   <Row label="Expected yield" value={`${d.currentYield}%`} color={meta.glow} />
-                  <Row label="Maturity" value={d.maturityDate === 'forever' ? '∞ Forever' : d.maturityDate} />
+                </div>
+              </div>
+            }
+          />
+        )}
+        {showDeployUsdcConfirm && (
+          <ConfirmDialog
+            title="Deploy to USDC — After Parent"
+            confirmLabel="⚡ Queue Deploy"
+            confirmColor={meta.glow}
+            onCancel={() => setShowDeployUsdcConfirm(false)}
+            onConfirm={handleDeployUsdc}
+            body={
+              <div>
+                <p className="mb-3" style={{ color: '#475569' }}>
+                  Deploy to USDC once the parent task completes?
+                </p>
+                <div className="rounded-xl p-3 space-y-1.5" style={{ background: `${meta.glow}0D`, border: `1px solid ${meta.glow}22` }}>
+                  <Row label="Asset" value={d.idleAsset} />
+                  <Row label="Amount" value={`$${d.amount}`} color={meta.glow} />
+                  <Row label="Target" value="USDC" color={meta.glow} />
+                  {parentNode && <Row label="After" value={parentNode.label} />}
                 </div>
               </div>
             }
@@ -1159,12 +1486,11 @@ function YieldPanel({ node }: { node: NodeData }) {
                   Execute the {redemptionFlow === 'portal' ? 'portal' : 'contracts'} redemption process now?
                 </p>
                 <div className="rounded-xl p-3 space-y-1.5" style={{ background: 'rgba(3,105,161,0.08)', border: '1px solid rgba(3,105,161,0.22)' }}>
-                  <Row label="Amount" value={`${redemptionAmount} USYC`} color="#0369A1" />
+                  <Row label="Amount" value={`${d.amount} USYC`} color="#0369A1" />
                   <Row label="Source chain" value={redemptionSourceChain} />
                   <Row label="Destination chain" value={redemptionDestinationChain} />
                   <Row label="Receiver" value={demoWalletAddress} />
                   <Row label="Flow" value={redemptionFlow === 'portal' ? 'Circle Portal' : 'teller.redeem(...)'} />
-                  <Row label="Fee" value={`${redemptionFeeBps} bps`} />
                 </div>
               </div>
             }
@@ -1335,6 +1661,108 @@ function SchedulePicker({
   )
 }
 
+// ─── One-time trigger sub-section (for Distribute) ────────────────────────────
+
+function OneTimeTrigger({
+  node, d, u, meta,
+}: {
+  node: NodeData
+  d: DistributeData
+  u: (p: Partial<DistributeData>) => void
+  meta: typeof NODE_TYPE_META[keyof typeof NODE_TYPE_META]
+}) {
+  const nodes = useGraphStore(s => s.nodes)
+  const connections = useGraphStore(s => s.connections)
+  const trigger = d.trigger ?? 'date'
+
+  // Find direct parent node (first incoming connection's source)
+  const incomingConn = connections.find(c => c.toNodeId === node.id)
+  const parentNode = incomingConn ? nodes.find(n => n.id === incomingConn.fromNodeId) : null
+  const parentIsScheduled = parentNode && (parentNode.type === 'swap' || parentNode.type === 'yield' || parentNode.type === 'distribute')
+
+  return (
+    <div className="space-y-2">
+      {/* Trigger type selector */}
+      <div className="p-2 rounded-xl" style={{ background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.07)' }}>
+        <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', marginBottom: 4, letterSpacing: '0.06em' }}>
+          EXECUTE WHEN
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => u({ trigger: 'date' })}
+            className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+            style={{
+              background: trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${trigger === 'date' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+              color: trigger === 'date' ? '#fff' : '#64748B',
+              fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+            }}
+          >
+            📅 On date
+          </button>
+          <button
+            onClick={() => u({ trigger: 'after_parent' })}
+            className="flex-1 py-1.5 rounded-lg text-center transition-all duration-150"
+            style={{
+              background: trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${trigger === 'after_parent' ? meta.glow : 'rgba(0,0,0,0.08)'}`,
+              color: trigger === 'after_parent' ? '#fff' : '#64748B',
+              fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+            }}
+          >
+            ⚡ After parent
+          </button>
+        </div>
+      </div>
+
+      {/* Date picker */}
+      {trigger === 'date' && (
+        <Field
+          label="Execution date"
+          value={d.oneTimeDate ?? ''}
+          onChange={v => u({ oneTimeDate: v })}
+          type="date"
+          color={meta.glow}
+        />
+      )}
+
+      {/* After parent info */}
+      {trigger === 'after_parent' && (
+        <div className="px-3 py-2.5 rounded-xl space-y-1"
+          style={{ background: `${meta.glow}0A`, border: `1px solid ${meta.glow}22` }}>
+          {parentIsScheduled ? (
+            <>
+              <div style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace', letterSpacing: '0.06em' }}>
+                TRIGGERS AFTER
+              </div>
+              <div className="flex items-center gap-2">
+                <div style={{
+                  width: 18, height: 18, borderRadius: '50%',
+                  background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.55) 18%, ${NODE_TYPE_META[parentNode!.type].color2} 52%, ${NODE_TYPE_META[parentNode!.type].color1} 100%)`,
+                  flexShrink: 0,
+                }} />
+                <span style={{ fontSize: 11, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif', fontWeight: 600 }}>
+                  {parentNode!.label}
+                </span>
+                <span style={{ fontSize: 9, color: '#94A3B8', fontFamily: 'monospace' }}>
+                  completes
+                </span>
+              </div>
+              <div style={{ fontSize: 8, color: '#94A3B8', fontFamily: 'monospace', paddingTop: 2 }}>
+                Executes immediately after the parent action finalises
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 10, color: '#94A3B8', fontFamily: 'monospace', textAlign: 'center', padding: '4px 0' }}>
+              Connect a swap, yield, or distribute node upstream to use this trigger
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Distribute panel ─────────────────────────────────────────────────────────
 
 function DistributePanel({ node }: { node: NodeData }) {
@@ -1344,11 +1772,13 @@ function DistributePanel({ node }: { node: NodeData }) {
   const connections = useGraphStore(s => s.connections)
   const upd = useGraphStore(s => s.updateNodeData)
   const updateNodeValue = useGraphStore(s => s.updateNodeValue)
+  const updateNodeLabel = useGraphStore(s => s.updateNodeLabel)
   const logHistory = useGraphStore(s => s.logHistory)
   const confirmHistoryEntry = useGraphStore(s => s.confirmHistoryEntry)
   const u = (p: Partial<DistributeData>) => upd(node.id, p as Record<string, unknown>)
   const setR = (i: number, field: string, val: string) =>
     u({ recipients: d.recipients.map((r, idx) => idx === i ? { ...r, [field]: val } : r) })
+  const distUpstreamMax = getUpstreamMax(node.id, d.currency, nodes, connections)
 
   const [showConfirm, setShowConfirm] = useState(false)
 
@@ -1392,7 +1822,7 @@ function DistributePanel({ node }: { node: NodeData }) {
         />
 
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Total amount" value={d.totalAmount} onChange={v => u({ totalAmount: v })} color={meta.glow} />
+          <AmountField label="Total amount" value={d.totalAmount} onChange={v => u({ totalAmount: v })} color={meta.glow} upstreamMax={distUpstreamMax} />
           <Field label="Currency" value={d.currency} onChange={v => u({ currency: v })}
             type="select" options={['USDC', 'USDT', 'DAI', 'ETH']} color={meta.glow} />
         </div>
@@ -1406,6 +1836,9 @@ function DistributePanel({ node }: { node: NodeData }) {
               onDayChange={v => u({ executionDay: v })}
               color={meta.glow}
             />
+            {d.schedule === 'One-time' && (
+              <OneTimeTrigger node={node} d={d} u={u} meta={meta} />
+            )}
             <SectionDivider label="RECIPIENTS" />
             {d.recipients.map((r, i) => (
               <div key={i} className="rounded-xl p-2 space-y-1"
@@ -1435,9 +1868,10 @@ function DistributePanel({ node }: { node: NodeData }) {
             <Field label="To address" value={d.recipients[0]?.address ?? ''} onChange={v =>
               u({ recipients: [{ ...(d.recipients[0] ?? { name: 'Recipient', amount: d.totalAmount, pct: '100' }), address: v }] })
             } />
-            <Field label="Memo / label" value={d.recipients[0]?.name ?? ''} onChange={v =>
+            <Field label="Memo / label" value={d.recipients[0]?.name ?? ''} onChange={v => {
               u({ recipients: [{ ...(d.recipients[0] ?? { address: '', amount: d.totalAmount, pct: '100' }), name: v }] })
-            } />
+              if (v.trim()) updateNodeLabel(node.id, v.trim())
+            }} />
             <SchedulePicker
               schedule={d.schedule}
               executionDay={d.executionDay}
@@ -1445,6 +1879,9 @@ function DistributePanel({ node }: { node: NodeData }) {
               onDayChange={v => u({ executionDay: v })}
               color={meta.glow}
             />
+            {d.schedule === 'One-time' && (
+              <OneTimeTrigger node={node} d={d} u={u} meta={meta} />
+            )}
           </>
         )}
 
@@ -1744,6 +2181,7 @@ function AgentPanel({ node }: { node: NodeData }) {
   const incomingConn = connections.find(c => c.toNodeId === node.id)
   const budgetSource = incomingConn ? nodes.find(n => n.id === incomingConn.fromNodeId) : null
   const budgetSourceMeta = budgetSource ? NODE_TYPE_META[budgetSource.type] : null
+  const agentUpstreamMax = getUpstreamMax(node.id, 'USDC', nodes, connections)
 
   // Simulate log progression while running
   const logIndexRef = useRef(0)
@@ -1867,11 +2305,12 @@ function AgentPanel({ node }: { node: NodeData }) {
       </div>
 
       {/* Max budget */}
-      <Field
+      <AmountField
         label="Max budget (USDC)"
         value={d.maxBudget}
         onChange={v => u({ maxBudget: v })}
         color={meta.glow}
+        upstreamMax={agentUpstreamMax}
       />
 
       {d.usedBudget !== '0' && (

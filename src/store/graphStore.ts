@@ -14,6 +14,7 @@ export interface HistoryEntry {
     | 'distribution_sent'
     | 'swap_executed'
     | 'yield_deployed'
+    | 'yield_deployed_usdc'
     | 'usyc_redeemed'
     | 'wallet_created'
     | 'agent_started'
@@ -39,6 +40,7 @@ function makeDefaultData(type: NodeType): NodeData['data'] {
         amount: '50,000', rate: '0.000267',
         timeLocked: false, slippage: '0.5',
         fromStable: 'USDC', toStable: 'USDT', spread: '0.02',
+        schedule: 'One-time',
       } as SwapData
     case 'yield':
       return {
@@ -48,10 +50,8 @@ function makeDefaultData(type: NodeType): NodeData['data'] {
         maturityDate: '2025-12-31', conversionProgress: 68,
         whitelistGranted: true,
         redemptionFlow: 'portal',
-        redemptionAmount: '25,000',
-        redemptionSourceChain: 'Ethereum',
-        redemptionDestinationChain: 'Ethereum',
-        redemptionFeeBps: '5',
+        redemptionSourceChain: 'Arc',
+        redemptionDestinationChain: 'Arc',
       } as YieldData
     case 'distribute':
       return {
@@ -100,7 +100,7 @@ const INITIAL_NODES: NodeData[] = [
     type: 'swap',
     position: { x: 280, y: 290 },
     label: 'ETH Swap',
-    value: '50K USDC',
+    value: '50K USDC → ETH',
     size: 72,
     data: makeDefaultData('swap'),
     isSelected: false,

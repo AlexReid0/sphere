@@ -66,7 +66,7 @@ export function SphereNode({ node }: SphereNodeProps) {
     e.stopPropagation()
     selectNode(node.id)
     const nodeScreenX = node.position.x * zoom + canvasOffset.x
-    const nodeScreenY = (node.position.y + 50) * zoom + canvasOffset.y
+    const nodeScreenY = node.position.y * zoom + canvasOffset.y
     startDragging(node.id, (e.clientX - nodeScreenX) / zoom, (e.clientY - nodeScreenY) / zoom)
   }, [node.id, node.position, zoom, canvasOffset, selectNode, startDragging])
 

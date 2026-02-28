@@ -104,18 +104,23 @@ export function SuggestedNodes({ parentId, parentType, parentX, parentY, parentS
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); handleAdd(sug, angle) }}
           >
-            {/* Ghost sphere */}
-            <div
-              className="w-14 h-14 rounded-full flex flex-col items-center justify-center transition-all duration-200 group-hover:scale-110"
-              style={{
-                background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.5) 18%, ${meta.color2}99 52%, ${meta.color1}55 100%)`,
-                border: `1.5px dashed ${meta.glow}88`,
-                boxShadow: `0 2px 12px ${meta.glow}44, 0 1px 4px rgba(0,0,0,0.1)`,
-              }}
-            >
-              <span style={{ fontSize: 15, opacity: 0.9, lineHeight: 1 }}>{meta.icon}</span>
-              <span style={{ fontSize: 8, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif',
-                fontWeight: 600, marginTop: 2, opacity: 0.95, letterSpacing: '0.02em' }}>
+            {/* Ghost sphere + label */}
+            <div className="flex flex-col items-center" style={{ gap: 4 }}>
+              <div
+                className="w-14 h-14 rounded-full flex items-center justify-center transition-all duration-200 group-hover:scale-110"
+                style={{
+                  background: `radial-gradient(circle at 36% 28%, #fff 0%, rgba(255,255,255,0.5) 18%, ${meta.color2}99 52%, ${meta.color1}55 100%)`,
+                  border: `1.5px dashed ${meta.glow}88`,
+                  boxShadow: `0 2px 12px ${meta.glow}44, 0 1px 4px rgba(0,0,0,0.1)`,
+                }}
+              >
+                <span style={{ fontSize: 18, opacity: 0.9, lineHeight: 1 }}>{meta.icon}</span>
+              </div>
+              <span style={{
+                fontSize: 8, color: meta.glow, fontFamily: 'Space Grotesk, sans-serif',
+                fontWeight: 600, opacity: 0.95, letterSpacing: '0.02em',
+                textAlign: 'center', maxWidth: 64, lineHeight: 1.2,
+              }}>
                 {sug.label}
               </span>
             </div>

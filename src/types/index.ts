@@ -34,6 +34,10 @@ export interface SwapData {
   spread: string
   // StableFX tenor (Circle API: instant | hourly | daily)
   tenor?: 'instant' | 'hourly' | 'daily'
+  // Scheduling (shared for crypto and stableFX)
+  schedule?: string       // 'One-time' | 'Daily' | 'Weekly' | 'Biweekly' | 'Monthly' | 'Quarterly'
+  executionDay?: string   // weekday name for weekly, day-of-month for monthly
+  trigger?: 'date' | 'after_parent'  // one-time execution trigger mode
   // Quote state (simulated Circle quote response)
   quoteId?: string
   quoteExpiry?: string     // ISO timestamp
@@ -61,6 +65,8 @@ export interface YieldData {
   redemptionSourceChain?: string
   redemptionDestinationChain?: string
   redemptionFeeBps?: string
+  // Deploy trigger: after parent task completes → deploy to USDC
+  trigger?: 'date' | 'after_parent'
 }
 
 export interface DistributeData {
@@ -70,6 +76,9 @@ export interface DistributeData {
   schedule: string
   // Exact scheduling
   executionDay?: string    // day-of-month "1"-"28" for monthly, weekday name for weekly
+  // One-time trigger options
+  trigger?: 'date' | 'after_parent'   // how to trigger a one-time distribution
+  oneTimeDate?: string                 // ISO date string when trigger = 'date'
   recipients: Array<{ name: string; amount: string; address: string; pct?: string }>
 }
 
@@ -175,8 +184,8 @@ export const NODE_TYPE_META: Record<NodeType, {
 }
 
 export const SUGGESTIONS: Record<NodeType, NodeType[]> = {
-  swap: ['wallet', 'distribute'],
-  yield: ['wallet', 'distribute', 'swap'],
+  swap: ['distribute'],
+  yield: ['distribute', 'swap'],
   distribute: [],
   wallet: ['swap', 'yield', 'agent'],
   agent: [],

@@ -12,6 +12,7 @@ const KIND_META: Record<HistoryEntry['kind'], { icon: string; color: string }> =
   distribution_sent:  { icon: '→',  color: '#D97706' },
   swap_executed:      { icon: '⇄',  color: '#EA580C' },
   yield_deployed:     { icon: '↗',  color: '#0D9488' },
+  yield_deployed_usdc: { icon: '⚡', color: '#0D9488' },
   usyc_redeemed:      { icon: '↓',  color: '#0369A1' },
   wallet_created:     { icon: '◉',  color: '#1D4ED8' },
   agent_started:      { icon: '◈',  color: '#6366F1' },
